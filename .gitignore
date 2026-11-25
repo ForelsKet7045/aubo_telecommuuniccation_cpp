@@ -1,0 +1,7 @@
+/backups/
+/build/
+/downloads/
+/.history/
+/logfiles/
+/logs/
+*.log

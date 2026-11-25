@@ -1,0 +1,49 @@
+{
+  "ip": "169.254.138.6",
+  "port": 8899,
+  "exe": "D:\\gitRepo\\aubo_telecommunication_cpp\\build\\official-probe\\Release\\official_sdk_probe.exe",
+  "dll": "D:\\gitRepo\\aubo_telecommunication_cpp\\build\\official-probe\\Release\\aubo_sdk.dll",
+  "dll_sha256": "a5dbf1744643fef29d14889808bb6a5d5ebdd0f3cdf492a7b212cb31c7698a37",
+  "tests": [
+    {
+      "api": "rpc",
+      "exit_code": 1,
+      "timed_out": false,
+      "stdout": "loaded_dll=D:\\gitRepo\\aubo_telecommunication_cpp\\build\\official-probe\\Release\\aubo_sdk.dll\r\napi=rpc endpoint=169.254.138.6:8899\r\nstage=setRequestTimeout result=0\r\nstage=connect begin\r\nstage=connect result=-7\r\n",
+      "stderr": "SDK[3]: Connect to 169.254.138.6:8899\r\nSDK[3]: SDK getInterfaceVersionCode error: RPC request timeout. request: {\"id\":\"6i61rY0f-JYI4-FRxx\",\"jsonrpc\":\"2.0\",\"method\":\"SystemInfo.getInterfaceVersionCode\"} timer ec:操作成功完成。 time: 3012 ms\r\nSDK[3]: RPC client disconnected.\r\nSDK[3]: RPC Client logout\r\nERROR: connect returned -7\r\n",
+      "elapsed_seconds": 3.125,
+      "read_completed": false
+    },
+    {
+      "api": "rs",
+      "exit_code": 1,
+      "timed_out": false,
+      "stdout": "loaded_dll=D:\\gitRepo\\aubo_telecommunication_cpp\\build\\official-probe\\Release\\aubo_sdk.dll\r\napi=rs endpoint=169.254.138.6:8899\r\nstage=rs_initialize result=0\r\nstage=rs_create_context result=0\r\nstage=rs_login begin\r\nSet message topic fail!\r\nstage=rs_login result=-1\r\n",
+      "stderr": "[Error] [C:\\builds\\arcs\\aubo_sdk\\src\\connector_asio.h:123] Connect to 169.254.138.6:8903 FAILED: 由于目标计算机积极拒绝，无法连接。\r\n[Error] [C:\\builds\\arcs\\aubo_sdk\\src\\connector_rtde_tcp.h:236] RTDE client connect info FAILED: 由于目标计算机积极拒绝，无法连接。\r\n[Error] [C:\\builds\\arcs\\aubo_sdk\\src\\connector_rtde_tcp.h:393] setTopic: RTDE client has not connected\r\n[Error] [C:\\builds\\arcs\\aubo_sdk\\src\\connector_rtde_tcp.h:393] setTopic: RTDE client has not connected\r\n[Info] [C:\\builds\\arcs\\aubo_sdk\\src\\connector_asio.h:215] RPC Client logout\r\nERROR: rs_login returned -1\r\n",
+      "elapsed_seconds": 4.094,
+      "read_completed": false
+    },
+    {
+      "api": "service",
+      "exit_code": 1,
+      "timed_out": false,
+      "stdout": "loaded_dll=D:\\gitRepo\\aubo_telecommunication_cpp\\build\\official-probe\\Release\\aubo_sdk.dll\r\napi=service endpoint=169.254.138.6:8899\r\nsdk_version=0.26.0\r\nstage=setRequestTimeout result=0\r\nstage=robotServiceLogin begin\r\nSet message topic fail!\r\nstage=robotServiceLogin result=-1\r\n",
+      "stderr": "SDK[1]: Connect to 169.254.138.6:8903 FAILED: 由于目标计算机积极拒绝，无法连接。\r\nSDK[1]: RTDE client connect info FAILED: 由于目标计算机积极拒绝，无法连接。\r\nSDK[1]: setTopic: RTDE client has not connected\r\nSDK[1]: setTopic: RTDE client has not connected\r\nSDK[3]: RPC Client logout\r\nERROR: robotServiceLogin returned -1\r\n",
+      "elapsed_seconds": 4.11,
+      "read_completed": false
+    }
+  ],
+  "tcp_control": {
+    "connected": true,
+    "note": "TCP connectivity only; no SDK handshake"
+  },
+  "legacy_control": {
+    "dll_sha256": "66503d5e69a17145d2c54630a1e4ac55fef76876cb00dd76be1cd2514c658be9",
+    "exit_code": 0,
+    "stdout": "rs_initialize: 0\r\nrs_create_context: 0\r\nrs_login: 0\r\nrs_get_login_status: 0\r\nLogged in: True\r\nrs_get_robot_state: 0\r\nState: 0\r\nrs_get_current_waypoint: 0\r\nXYZ: [-0.06133981050854964, -0.22017378884087882, 0.29744696859332603]\r\nQuaternion WXYZ: [0.7150786344089791, 0.6930276798318848, -0.04892828772828435, -0.07733824576884643]\r\nJoints: [-0.7922981381416321, 0.9012854099273682, 2.3526482582092285, -1.6301534175872803, -0.6149302124977112, 3.055250883102417]\r\nrs_logout: 0\r\nrs_destory_context: 0\r\nrs_uninitialize: 0\r\n",
+    "stderr": ""
+  },
+  "official_sdk_api_version": "0.26.0",
+  "official_sdk_package_build": "0.26.0-rc.6+d2cc0fb (same DLL hash as the original backup)",
+  "conclusion": "TCP 8899 reachable; all three tested official SDK APIs failed to establish a usable session; legacy SDK read succeeded. No motion commands executed."
+}

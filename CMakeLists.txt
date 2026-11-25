@@ -25,3 +25,13 @@ add_custom_command(TARGET robot_communication POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "$<TARGET_FILE:aubo_sdk::aubo_sdk>" "$<TARGET_FILE_DIR:robot_communication>"
     VERBATIM)
+
+# Read-only compatibility probe. Build explicitly so ordinary builds are unchanged.
+add_executable(official_sdk_probe EXCLUDE_FROM_ALL tools/official_sdk_probe.cpp)
+target_compile_features(official_sdk_probe PRIVATE cxx_std_17)
+target_compile_options(official_sdk_probe PRIVATE /utf-8 /W4)
+target_link_libraries(official_sdk_probe PRIVATE aubo_sdk::aubo_sdk)
+add_custom_command(TARGET official_sdk_probe POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "$<TARGET_FILE:aubo_sdk::aubo_sdk>" "$<TARGET_FILE_DIR:official_sdk_probe>"
+    VERBATIM)
