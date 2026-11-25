@@ -47,10 +47,11 @@ double number(const std::string& text)
 
 struct Options {
     std::string command = "read", ip = "127.0.0.1", user = "aubo", password = "123456";
-    double seconds = 10, timeout = 30;
+    double seconds = 10, timeout = 60;
+    double speedMmS = 50, accelMmS2 = 100;
     int hz = 10;
     Values pose, delta;
-    bool help = false;
+    bool help = false, verbose = false;
 };
 
 Options parse(int argc, char** argv)
@@ -80,6 +81,9 @@ Options parse(int argc, char** argv)
             o.hz = static_cast<int>(hz);
             watchOption = true;
         } else if (arg == "--timeout") { o.timeout = number(next()); moveOption = true; }
+        else if (arg == "--speed-mm-s") { o.speedMmS = number(next()); moveOption = true; }
+        else if (arg == "--accel-mm-s2") { o.accelMmS2 = number(next()); moveOption = true; }
+        else if (arg == "--verbose") { o.verbose = true; moveOption = true; }
         else if (arg == "--pose" || arg == "--delta-mm") {
             if (!o.pose.empty() || !o.delta.empty())
                 throw std::invalid_argument("Specify exactly one --pose or --delta-mm");
@@ -91,10 +95,12 @@ Options parse(int argc, char** argv)
     }
     if (o.seconds <= 0 || o.timeout <= 0)
         throw std::invalid_argument("--seconds and --timeout must be positive");
+    if (o.speedMmS <= 0 || o.accelMmS2 <= 0)
+        throw std::invalid_argument("--speed-mm-s and --accel-mm-s2 must be positive");
     if (watchOption && o.command != "watch")
         throw std::invalid_argument("--seconds and --hz require watch");
     if (moveOption && o.command != "move")
-        throw std::invalid_argument("--pose, --delta-mm and --timeout require move");
+        throw std::invalid_argument("--pose, --delta-mm, --timeout, --speed-mm-s, --accel-mm-s2 and --verbose require move");
     if (o.command == "move" && o.pose.empty() && o.delta.empty())
         throw std::invalid_argument("move requires --pose or --delta-mm");
     return o;
@@ -241,27 +247,51 @@ void move(RpcClient& rpc, RobotInterfacePtr robot, const Options& o)
         throw std::runtime_error("Stop the existing robot program before sending a target");
     if (motion->getExecId() != -1 || !state->isSteady())
         throw std::runtime_error("Robot is moving; wait until it is steady");
-    if (arrived(state->getTcpPose())) {
+    const auto initial = state->getTcpPose();
+    validate(initial);
+    if (arrived(initial)) {
         std::cerr << "Already at target; no motion requested\n";
         return;
     }
+    std::cerr << "MoveL: speed=" << o.speedMmS << " mm/s, acceleration=" << o.accelMmS2
+              << " mm/s^2, timeout=" << o.timeout << " s\n";
+    // Report the operator's speed setting without changing it.
+    try {
+        const double fraction = motion->getSpeedFraction();
+        if (!std::isfinite(fraction) || fraction < 0 || fraction > 1)
+            throw std::runtime_error("Invalid speed fraction returned by SDK");
+        std::cerr << "Controller speed fraction=" << fraction * 100 << "% (unchanged)\n";
+    } catch (const std::exception& e) {
+        std::cerr << "Could not read controller speed fraction: " << e.what() << '\n';
+    }
+    std::cerr << "Start TCP:\n";
+    showPose(initial);
+    std::cerr << "Target TCP:\n";
+    showPose(target);
     checkCancelled();
     try {
-        // One MoveL target: acceleration 0.05 m/s^2, speed 0.01 m/s, no blending.
-        check(motion->moveLine(target, 0.05, 0.01, 0, 0), "moveLine");
+        // CLI units are mm; the SDK expects metres. Send one target, no blending.
+        check(motion->moveLine(target, o.accelMmS2 / 1000, o.speedMmS / 1000, 0, 0), "moveLine");
         const auto start = Clock::now();
         while (std::chrono::duration<double>(Clock::now() - start).count() < o.timeout) {
             checkCancelled();
             checkState();
             const auto actual = state->getTcpPose();
-            showPose(actual);
+            if (o.verbose) showPose(actual);
             if (motion->getExecId() == -1 && state->isSteady() && arrived(actual)) {
+                if (!o.verbose) showPose(actual);
                 std::cerr << "Arrived: position error < 0.01 mm, orientation error < 0.0001 rad\n";
                 return;
             }
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
-        throw std::runtime_error("Timed out waiting for the target");
+        const auto actual = state->getTcpPose();
+        validate(actual);
+        showPose(actual);
+        const double dx = target[0] - actual[0], dy = target[1] - actual[1], dz = target[2] - actual[2];
+        throw std::runtime_error("Timed out waiting for the target after " + std::to_string(o.timeout) +
+            " s; remaining XYZ distance=" + std::to_string(std::sqrt(dx * dx + dy * dy + dz * dz) * 1000) +
+            " mm; check controller speed fraction, target feedback and --timeout");
     } catch (...) {
         // Disconnecting does not cancel a motion already accepted by the controller.
         try {
@@ -284,11 +314,13 @@ int main(int argc, char** argv)
             std::cout << "robot_communication [read|watch|move] [--ip IP] [--user USER] [--password PASSWORD]\n"
                          "  read                         Read TCP pose and joint positions (default)\n"
                          "  watch [--seconds 10] [--hz 10]  RTDE feedback, 1..50 Hz; Ctrl+C to stop\n"
-                         "  move --pose X Y Z RX RY RZ [--timeout 30]\n"
-                         "  move --delta-mm DX DY DZ [--timeout 30]\n"
+                         "  move --pose X Y Z RX RY RZ [motion options]\n"
+                         "  move --delta-mm DX DY DZ [motion options]\n"
+                         "Motion options: --speed-mm-s 50 --accel-mm-s2 100 --timeout 60 [--verbose]\n"
+                         "Speed/acceleration/timeout must be positive; --verbose prints intermediate poses.\n"
                          "Pose: base frame, metres / RPY radians. Delta: base frame, millimetres.\n"
                          "Default: 127.0.0.1, aubo / 123456. RPC: 30004, RTDE: 30010.\n"
-                         "move requests motion; it does not power on or change TCP configuration.\n";
+                         "move requests motion; it does not power on or change TCP configuration or speed fraction.\n";
             return 0;
         }
         checkCancelled();
