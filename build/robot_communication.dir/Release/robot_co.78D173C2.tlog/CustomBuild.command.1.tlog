@@ -1,0 +1,10 @@
+^D:\GITREPO\AUBO_TELECOMMUNICATION_CPP\CMAKELISTS.TXT
+setlocal
+C:\Users\Administrator\scoop\apps\cmake\current\bin\cmake.exe -SD:/gitRepo/aubo_telecommunication_cpp -BD:/gitRepo/aubo_telecommunication_cpp/build --check-stamp-file D:/gitRepo/aubo_telecommunication_cpp/build/CMakeFiles/generate.stamp
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd
