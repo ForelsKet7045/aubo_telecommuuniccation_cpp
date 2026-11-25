@@ -1,0 +1,84 @@
+{
+  "repository": "https://github.com/ziywang50/AubosdkProject",
+  "revision": "881657eb2274ee8f45ee0cdf92e3aa652b10e874",
+  "note": "Third-party redistribution of legacy AUBO SDK; not an official V2.5.3 release.",
+  "files": [
+    {
+      "path": "include/rsdef.h",
+      "url": "https://raw.githubusercontent.com/ziywang50/AubosdkProject/881657eb2274ee8f45ee0cdf92e3aa652b10e874/dependens/auboi5/inc/rsdef.h",
+      "sha256": "c4cfed871a03215879422fa82340421ca063a0d18e002841b85930dc0c23dadc",
+      "bytes": 41375,
+      "installed_sha256": "c4cfed871a03215879422fa82340421ca063a0d18e002841b85930dc0c23dadc"
+    },
+    {
+      "path": "include/rstype.h",
+      "url": "https://raw.githubusercontent.com/ziywang50/AubosdkProject/881657eb2274ee8f45ee0cdf92e3aa652b10e874/dependens/auboi5/inc/rstype.h",
+      "sha256": "863a2c59bfc7108dcaa21cf27ba4344038e7cfcbd6b43a5973601f304c9b190d",
+      "bytes": 499,
+      "installed_sha256": "863a2c59bfc7108dcaa21cf27ba4344038e7cfcbd6b43a5973601f304c9b190d"
+    },
+    {
+      "path": "include/rserrors.h",
+      "url": "https://raw.githubusercontent.com/ziywang50/AubosdkProject/881657eb2274ee8f45ee0cdf92e3aa652b10e874/dependens/auboi5/inc/rserrors.h",
+      "sha256": "02d5c1d4d311d1a660a48395bf15ff2489accba59dfa70db2db66e91ad9c00d9",
+      "bytes": 375,
+      "installed_sha256": "02d5c1d4d311d1a660a48395bf15ff2489accba59dfa70db2db66e91ad9c00d9"
+    },
+    {
+      "path": "include/AuboRobotMetaType.h",
+      "url": "https://raw.githubusercontent.com/ziywang50/AubosdkProject/881657eb2274ee8f45ee0cdf92e3aa652b10e874/dependens/auboi5/inc/AuboRobotMetaType.h",
+      "sha256": "8aab2c1195fb81ef0978aad71a94139d1d2d34a2795b8d8b1d3a1d418222283f",
+      "bytes": 30745,
+      "installed_sha256": "8aab2c1195fb81ef0978aad71a94139d1d2d34a2795b8d8b1d3a1d418222283f"
+    },
+    {
+      "path": "bin/libserviceinterface.dll",
+      "url": "https://raw.githubusercontent.com/ziywang50/AubosdkProject/881657eb2274ee8f45ee0cdf92e3aa652b10e874/dependens/auboi5/dll/libserviceinterface.dll",
+      "sha256": "66503d5e69a17145d2c54630a1e4ac55fef76876cb00dd76be1cd2514c658be9",
+      "bytes": 1974272,
+      "installed_sha256": "66503d5e69a17145d2c54630a1e4ac55fef76876cb00dd76be1cd2514c658be9"
+    },
+    {
+      "path": "bin/libconfig.dll",
+      "url": "https://raw.githubusercontent.com/ziywang50/AubosdkProject/881657eb2274ee8f45ee0cdf92e3aa652b10e874/dependens/auboi5/dll/libconfig.dll",
+      "sha256": "739ae7a72355e5b2125d1c3e1f7dd819c939a0c00697d7bf8c05f6cd754c0d0f",
+      "bytes": 38912,
+      "installed_sha256": "739ae7a72355e5b2125d1c3e1f7dd819c939a0c00697d7bf8c05f6cd754c0d0f"
+    },
+    {
+      "path": "bin/libgcc_s_seh-1.dll",
+      "url": "https://raw.githubusercontent.com/ziywang50/AubosdkProject/881657eb2274ee8f45ee0cdf92e3aa652b10e874/dependens/auboi5/dll/libgcc_s_seh-1.dll",
+      "sha256": "e298fa2e8729b17208ccd20b585b01ef58d10fb050eb03c72fdb04ea5462e766",
+      "bytes": 83150,
+      "installed_sha256": "e298fa2e8729b17208ccd20b585b01ef58d10fb050eb03c72fdb04ea5462e766"
+    },
+    {
+      "path": "bin/libstdc++-6.dll",
+      "url": "https://raw.githubusercontent.com/ziywang50/AubosdkProject/881657eb2274ee8f45ee0cdf92e3aa652b10e874/dependens/auboi5/dll/libstdc++-6.dll",
+      "sha256": "f5ff110ea78a0b985fdbafab2b1f3fc6a8f860568002c9cb9c766048faf59a7f",
+      "bytes": 1432713,
+      "installed_sha256": "f5ff110ea78a0b985fdbafab2b1f3fc6a8f860568002c9cb9c766048faf59a7f"
+    },
+    {
+      "path": "bin/libwinpthread-1.dll",
+      "url": "https://raw.githubusercontent.com/ziywang50/AubosdkProject/881657eb2274ee8f45ee0cdf92e3aa652b10e874/dependens/auboi5/dll/libwinpthread-1.dll",
+      "sha256": "b5907263ff1cc16346f1948b92a8a6ddc50612b25ecd743ca18e94a2a5df0024",
+      "bytes": 57379,
+      "installed_sha256": "b5907263ff1cc16346f1948b92a8a6ddc50612b25ecd743ca18e94a2a5df0024"
+    },
+    {
+      "path": "lib/libserviceinterface.lib",
+      "url": "https://raw.githubusercontent.com/ziywang50/AubosdkProject/881657eb2274ee8f45ee0cdf92e3aa652b10e874/dependens/auboi5/lib/libserviceinterface.lib",
+      "sha256": "954da7ab364104cd6034ab4bdb921d1befa85d5b2d00beec490ba1093db40d44",
+      "bytes": 2670200,
+      "installed_sha256": "954da7ab364104cd6034ab4bdb921d1befa85d5b2d00beec490ba1093db40d44"
+    }
+  ],
+  "dll_file_version": "1.3.0.0",
+  "controller_tested": {
+    "ip": "169.254.138.6",
+    "port": 8899,
+    "server": "V4.5.111.71f2ee1-Alpha",
+    "teach_pendant_sdk": "V2.5.3_6e1ea35"
+  }
+}

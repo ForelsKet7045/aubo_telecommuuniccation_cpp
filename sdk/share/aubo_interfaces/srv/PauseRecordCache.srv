@@ -1,5 +1,0 @@
-bool pause
----
-int32 result
-int32 code
-string message

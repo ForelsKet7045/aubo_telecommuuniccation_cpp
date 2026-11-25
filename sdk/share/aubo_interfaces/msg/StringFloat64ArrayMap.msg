@@ -1,1 +1,0 @@
-StringFloat64ArrayKV[] items

@@ -1,0 +1,2 @@
+# Preserve the downloaded SDK exactly, including original header line endings.
+/sdk/** -text

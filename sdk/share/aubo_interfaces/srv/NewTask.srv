@@ -1,5 +1,0 @@
-bool daemon
----
-int32 result
-int32 code
-string message

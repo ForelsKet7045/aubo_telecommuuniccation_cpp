@@ -1,6 +1,0 @@
-string key
-int8[] value
----
-int32 result
-int32 code
-string message

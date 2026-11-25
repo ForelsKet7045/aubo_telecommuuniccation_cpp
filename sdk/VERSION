@@ -1,1 +1,4 @@
-0.26.0-rc.6+d2cc0fb
+legacy-serviceinterface
+DLL FileVersion: 1.3.0.0
+Redistribution revision: 881657eb2274ee8f45ee0cdf92e3aa652b10e874
+Not an official V2.5.3 SDK package; read-only interoperability tested on V4.5.111.

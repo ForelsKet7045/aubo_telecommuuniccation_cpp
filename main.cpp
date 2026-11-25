@@ -1,25 +1,26 @@
-#include <aubo_sdk/rpc.h>
-#include <aubo_sdk/rtde.h>
-
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <condition_variable>
 #include <csignal>
-#include <exception>
 #include <iomanip>
 #include <iostream>
-#include <memory>
-#include <mutex>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
 #include <vector>
 
-using namespace arcs::aubo_sdk;
-using namespace arcs::common_interface;
+#include <rsdef.h>
+
+using namespace aubo_robot_namespace;
 using Clock = std::chrono::steady_clock;
 using Values = std::vector<double>;
+
+// Fixed-size POD values cross the ABI boundary to the MinGW-built vendor DLL.
+static_assert(sizeof(RSHD) == 2, "Unexpected SDK handle ABI");
+static_assert(sizeof(wayPoint_S) == 104, "Unexpected SDK waypoint ABI");
+static_assert(sizeof(Ori) == 32 && sizeof(Rpy) == 24, "Unexpected SDK pose ABI");
+static_assert(sizeof(RobotDiagnosis) == 52, "Unexpected SDK diagnosis ABI");
 
 namespace {
 volatile std::sig_atomic_t interrupted = 0;
@@ -27,7 +28,7 @@ void onSignal(int) { interrupted = 1; }
 
 void check(int result, const char* action)
 {
-    if (result != 0)
+    if (result != RS_SUCC)
         throw std::runtime_error(std::string(action) + ": SDK return code " + std::to_string(result));
 }
 
@@ -45,19 +46,27 @@ double number(const std::string& text)
     return value;
 }
 
+int integer(const std::string& text, int low, int high, const char* option)
+{
+    const double value = number(text);
+    if (value < low || value > high || std::floor(value) != value)
+        throw std::invalid_argument(std::string(option) + " must be an integer from " +
+                                    std::to_string(low) + " to " + std::to_string(high));
+    return static_cast<int>(value);
+}
+
 struct Options {
-    std::string command = "read", ip = "127.0.0.1", user = "aubo", password = "123456";
+    std::string command = "read", ip = "127.0.0.1";
+    int port = 8899, hz = 10;
     double seconds = 10, timeout = 30;
-    int hz = 10;
     Values pose, delta;
-    bool help = false;
+    bool help = false, dryRun = false;
 };
 
 Options parse(int argc, char** argv)
 {
     Options o;
-    bool commandSet = false;
-    bool watchOption = false, moveOption = false;
+    bool commandSet = false, watchOption = false, moveOption = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() -> std::string {
@@ -65,21 +74,16 @@ Options parse(int argc, char** argv)
             return argv[i];
         };
         if (arg == "--help" || arg == "-h") { o.help = true; return o; }
-        if (arg == "read" || arg == "watch" || arg == "move") {
+        if (arg == "read" || arg == "watch" || arg == "move" || arg == "diagnose") {
             if (commandSet) throw std::invalid_argument("Specify one command");
             o.command = arg;
             commandSet = true;
         } else if (arg == "--ip") o.ip = next();
-        else if (arg == "--user") o.user = next();
-        else if (arg == "--password") o.password = next();
+        else if (arg == "--port") o.port = integer(next(), 1, 65535, "--port");
         else if (arg == "--seconds") { o.seconds = number(next()); watchOption = true; }
-        else if (arg == "--hz") {
-            const double hz = number(next());
-            if (hz < 1 || hz > 50 || std::floor(hz) != hz)
-                throw std::invalid_argument("--hz must be an integer from 1 to 50");
-            o.hz = static_cast<int>(hz);
-            watchOption = true;
-        } else if (arg == "--timeout") { o.timeout = number(next()); moveOption = true; }
+        else if (arg == "--hz") { o.hz = integer(next(), 1, 50, "--hz"); watchOption = true; }
+        else if (arg == "--timeout") { o.timeout = number(next()); moveOption = true; }
+        else if (arg == "--dry-run") { o.dryRun = true; moveOption = true; }
         else if (arg == "--pose" || arg == "--delta-mm") {
             if (!o.pose.empty() || !o.delta.empty())
                 throw std::invalid_argument("Specify exactly one --pose or --delta-mm");
@@ -87,188 +91,328 @@ Options parse(int argc, char** argv)
             const int count = arg == "--pose" ? 6 : 3;
             for (int axis = 0; axis < count; ++axis) target.push_back(number(next()));
             moveOption = true;
+        } else if (arg == "--user" || arg == "--password") {
+            throw std::invalid_argument("The legacy rs_login API does not accept --user/--password");
         } else throw std::invalid_argument("Unknown argument: " + arg);
     }
+    if (o.ip.empty()) throw std::invalid_argument("--ip must not be empty");
     if (o.seconds <= 0 || o.timeout <= 0)
         throw std::invalid_argument("--seconds and --timeout must be positive");
     if (watchOption && o.command != "watch")
         throw std::invalid_argument("--seconds and --hz require watch");
     if (moveOption && o.command != "move")
-        throw std::invalid_argument("--pose, --delta-mm and --timeout require move");
+        throw std::invalid_argument("--pose, --delta-mm, --timeout and --dry-run require move");
     if (o.command == "move" && o.pose.empty() && o.delta.empty())
         throw std::invalid_argument("move requires --pose or --delta-mm");
     return o;
 }
 
-// RAII: login failures and exceptions also release the connection.
-template<class Client> struct Session {
-    Client client;
-    void open(const Options& o, int port)
+class Session {
+public:
+    RSHD handle = 0;
+    Session() = default;
+    Session(const Session&) = delete;
+    Session& operator=(const Session&) = delete;
+
+    void open(const Options& o)
     {
-        client.setLogHandler([](int level, const char*, int, const std::string& message) {
-            if (level <= 2) std::cerr << "SDK: " << message << '\n';
-        });
-        check(client.connect(o.ip, port), "Connect");
-        if (!client.hasConnected()) throw std::runtime_error("Controller is not connected");
-        check(client.login(o.user, o.password), "Login");
-        if (!client.hasLogined()) throw std::runtime_error("Controller login failed");
+        check(rs_initialize(), "rs_initialize");
+        initialized_ = true;
+        check(rs_create_context(&handle), "rs_create_context");
+        created_ = true;
+        std::cerr << "Connecting to " << o.ip << ':' << o.port << " (legacy AUBO SDK)\n";
+        check(rs_login(handle, o.ip.c_str(), o.port), "rs_login");
+        loggedIn_ = true;
+        ensureConnected();
+        std::cerr << "Connected and logged in\n";
     }
+
+    void ensureConnected() const
+    {
+        bool loggedIn = false, connected = false;
+        check(rs_get_login_status(handle, &loggedIn), "rs_get_login_status");
+        check(rs_get_socket_status(handle, &connected), "rs_get_socket_status");
+        if (!loggedIn || !connected) throw std::runtime_error("Controller connection lost");
+    }
+
     ~Session()
     {
-        try { if (client.hasLogined()) client.logout(); } catch (...) {}
-        try { if (client.hasConnected()) client.disconnect(); } catch (...) {}
+        if (loggedIn_) rs_logout(handle);
+        if (created_) rs_destory_context(handle); // Spelling is part of the vendor API.
+        if (initialized_) rs_uninitialize();
     }
-};
 
-void validate(const Values& values)
-{
-    if (values.size() != 6 || !std::all_of(values.begin(), values.end(),
-            [](double v) { return std::isfinite(v); }))
-        throw std::runtime_error("Expected six finite pose/joint values");
-}
+private:
+    bool initialized_ = false, created_ = false, loggedIn_ = false;
+};
 
 double timestamp()
 {
     return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
 }
 
-void printArray(const char* key, const Values& values, double scale = 1, std::size_t count = 6)
+void validate(const wayPoint_S& waypoint)
+{
+    const auto& p = waypoint.cartPos.position;
+    const auto& q = waypoint.orientation;
+    const double norm = std::hypot(std::hypot(q.w, q.x), std::hypot(q.y, q.z));
+    if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z) ||
+        !std::isfinite(norm) || std::abs(norm - 1.0) > 1e-3 ||
+        !std::all_of(std::begin(waypoint.jointpos), std::end(waypoint.jointpos),
+                     [](double value) { return std::isfinite(value); }))
+        throw std::runtime_error("Invalid pose/joint feedback from controller");
+}
+
+wayPoint_S readWaypoint(const Session& session)
+{
+    session.ensureConnected();
+    wayPoint_S waypoint{};
+    check(rs_get_current_waypoint(session.handle, &waypoint), "rs_get_current_waypoint");
+    validate(waypoint);
+    return waypoint;
+}
+
+void printArray(const char* key, const Values& values)
 {
     std::cout << ",\"" << key << "\":[";
-    for (std::size_t i = 0; i < count; ++i) {
+    for (std::size_t i = 0; i < values.size(); ++i) {
         if (i) std::cout << ',';
-        std::cout << values.at(i) * scale;
+        std::cout << values[i];
     }
     std::cout << ']';
 }
 
-// TCP: base frame, [x,y,z,rx,ry,rz], metres and RPY radians.
-void showPose(const Values& pose, const Values& joints = {}, double time = timestamp())
+// Legacy waypoints are FLANGE poses in the base frame. They do not apply the
+// TCP/tool selected on the teach pendant.
+void showPose(RSHD handle, const wayPoint_S& waypoint)
 {
-    validate(pose);
-    if (!joints.empty()) validate(joints);
-    std::cout << std::setprecision(17) << "{\"time\":" << time;
-    printArray("pose_m_rad", pose);
-    printArray("xyz_mm", pose, 1000, 3);
-    if (!joints.empty()) {
-        printArray("joints_rad", joints);
-        printArray("joints_deg", joints, 180 / std::acos(-1.0));
-    }
+    Rpy rpy{};
+    check(rs_quaternion_to_rpy(handle, &waypoint.orientation, &rpy), "rs_quaternion_to_rpy");
+    if (!std::isfinite(rpy.rx) || !std::isfinite(rpy.ry) || !std::isfinite(rpy.rz))
+        throw std::runtime_error("Invalid RPY orientation");
+    const auto& p = waypoint.cartPos.position;
+    const auto& q = waypoint.orientation;
+    Values joints(std::begin(waypoint.jointpos), std::end(waypoint.jointpos));
+    Values degrees = joints;
+    for (auto& value : degrees) value *= 180 / std::acos(-1.0);
+    std::cout << std::setprecision(17) << "{\"time\":" << timestamp()
+              << ",\"frame\":\"base\",\"pose_reference\":\"flange\"";
+    printArray("pose_m_rad", {p.x, p.y, p.z, rpy.rx, rpy.ry, rpy.rz});
+    printArray("xyz_mm", {p.x * 1000, p.y * 1000, p.z * 1000});
+    printArray("quaternion_wxyz", {q.w, q.x, q.y, q.z});
+    printArray("joints_rad", joints);
+    printArray("joints_deg", degrees);
     std::cout << '}' << std::endl;
 }
 
-void watch(const Options& o)
+RobotState robotState(RSHD handle)
 {
-    struct Feedback {
-        std::mutex mutex;
-        std::condition_variable ready;
-        Values pose, joints;
-        double time = 0;
-        bool pending = false;
-        std::exception_ptr error;
-    };
-    // Keep the callback's state alive through SDK teardown; retain only the latest sample.
-    auto feedback = std::make_shared<Feedback>();
-    Session<RtdeClient> session;
-    session.open(o, 30010);
-    auto& rtde = session.client;
-    const int topic = rtde.setTopic(false, {"R1_actual_TCP_pose", "R1_actual_q"}, o.hz, 0);
-    if (topic < 0) throw std::runtime_error("RTDE setTopic failed");
-    check(rtde.subscribe(topic, [feedback](InputParser& parser) {
-        std::lock_guard<std::mutex> lock(feedback->mutex);
-        try {
-            feedback->pose = parser.popVectorDouble();
-            feedback->joints = parser.popVectorDouble();
-            validate(feedback->pose);
-            validate(feedback->joints);
-            feedback->time = timestamp();
-            feedback->pending = true;
-        } catch (...) { feedback->error = std::current_exception(); }
-        feedback->ready.notify_one();
-    }), "RTDE subscribe");
-    const auto start = Clock::now();
-    auto lastSample = start;
-    std::size_t count = 0;
-    while (!interrupted && std::chrono::duration<double>(Clock::now() - start).count() < o.seconds) {
-        if (!rtde.hasConnected()) throw std::runtime_error("RTDE connection lost");
-        std::unique_lock<std::mutex> lock(feedback->mutex);
-        feedback->ready.wait_for(lock, std::chrono::milliseconds(100), [&] {
-            return feedback->pending || feedback->error;
-        });
-        if (feedback->error) std::rethrow_exception(feedback->error);
-        if (feedback->pending) {
-            auto pose = feedback->pose, joints = feedback->joints;
-            const double time = feedback->time;
-            feedback->pending = false;
-            lock.unlock();
-            lastSample = Clock::now();
-            showPose(pose, joints, time);
-            ++count;
-        } else if (Clock::now() - lastSample > std::chrono::seconds(2)) {
-            throw std::runtime_error("No RTDE feedback for 2 seconds");
-        }
-    }
-    check(rtde.removeTopic(false, topic), "RTDE removeTopic");
-    std::cerr << "Received " << count << " feedback samples\n";
-    if (!interrupted && count == 0) throw std::runtime_error("No RTDE feedback received");
+    RobotState state = RobotStopped;
+    check(rs_get_robot_state(handle, &state), "rs_get_robot_state");
+    return state;
 }
 
-void move(RpcClient& rpc, RobotInterfacePtr robot, const Options& o)
+void watch(const Session& session, const Options& o)
 {
-    auto state = robot->getRobotState();
-    auto motion = robot->getMotionControl();
-    auto maths = rpc.getMath();
-    Values target = o.pose;
-    if (!o.delta.empty()) {
-        target = state->getTcpPose();
-        validate(target);
-        for (std::size_t axis = 0; axis < 3; ++axis) target[axis] += o.delta[axis] / 1000;
+    const auto start = Clock::now();
+    const auto period = std::chrono::duration<double>(1.0 / o.hz);
+    auto next = start;
+    std::size_t count = 0;
+    // --hz controls polling frequency, not RTDE streaming.
+    while (!interrupted && std::chrono::duration<double>(Clock::now() - start).count() < o.seconds) {
+        showPose(session.handle, readWaypoint(session));
+        ++count;
+        next += std::chrono::duration_cast<Clock::duration>(period);
+        if (next < Clock::now()) next = Clock::now();
+        while (!interrupted && Clock::now() < next)
+            std::this_thread::sleep_until(std::min(next, Clock::now() + std::chrono::milliseconds(50)));
     }
-    validate(target);
-    auto checkState = [&] {
-        if (state->getRobotModeType() != RobotModeType::Running)
-            throw std::runtime_error("Robot must be Running; power on and start first");
-        if (state->getSafetyModeType() != SafetyModeType::Normal)
-            throw std::runtime_error("Robot safety mode must be Normal");
+    std::cerr << "Received " << count << " legacy feedback samples\n";
+}
+
+RobotDiagnosis readDiagnosis(const Session& session)
+{
+    session.ensureConnected();
+    RobotDiagnosis diagnosis{};
+    check(rs_get_diagnosis_info(session.handle, &diagnosis), "rs_get_diagnosis_info");
+    return diagnosis;
+}
+
+using DiagnosisFlags = std::vector<std::pair<const char*, int>>;
+
+DiagnosisFlags blockingFlags(const RobotDiagnosis& d)
+{
+    // remoteHalt is a raw remote-power-off input, NOT an emergency/fault enum.
+    // Its active polarity is not specified by this legacy header. On the V4.5
+    // controller it reads 1 while pendant motion is available. Report it as-is;
+    // do not infer a fault or invert its polarity. Controller interlocks remain
+    // authoritative; explicit emergency/collision/hardware faults still block.
+    DiagnosisFlags flags = {
+        {"armPowerStatus", d.armPowerStatus},
+        {"softEmergency", d.softEmergency}, {"remoteEmergency", d.remoteEmergency},
+        {"robotCollision", d.robotCollision}, {"forceControlMode", d.forceControlMode},
+        {"armCanbusStatus", d.armCanbusStatus}, {"encoderErrorStatus", d.encoderErrorStatus},
+        {"encoderLinesError", d.encoderLinesError}, {"jointErrorStatus", d.jointErrorStatus},
+        {"jointCollisionDetect", d.jointCollisionDetect},
+        {"singularityOverSpeedAlarm", d.singularityOverSpeedAlarm},
+        {"robotCurrentAlarm", d.robotCurrentAlarm}
     };
-    auto arrived = [&](const Values& actual) {
-        validate(actual);
-        return maths->poseDistance(actual, target) < 1e-5 &&
-               maths->poseAngleDistance(actual, target) < 1e-4;
+    flags.erase(std::remove_if(flags.begin(), flags.end(), [](const auto& flag) {
+        return std::string(flag.first) == "armPowerStatus" ? flag.second != 0 : flag.second == 0;
+    }), flags.end());
+    return flags;
+}
+
+void printBlockers(const DiagnosisFlags& flags)
+{
+    std::cout << ",\"motion_blockers\":[";
+    for (std::size_t i = 0; i < flags.size(); ++i) {
+        if (i) std::cout << ',';
+        std::cout << '"' << flags[i].first << '=' << flags[i].second << '"';
+    }
+    std::cout << ']';
+}
+
+void diagnose(const Session& session)
+{
+    const auto d = readDiagnosis(session);
+    const auto flags = blockingFlags(d);
+    std::cout << std::setprecision(17) << "{\"time\":" << timestamp()
+              << ",\"robot_motion_state\":" << static_cast<int>(robotState(session.handle))
+              << ",\"diagnosis\":{";
+    const DiagnosisFlags rawFlags = {
+        {"armPowerStatus", d.armPowerStatus}, {"remoteHalt_raw", d.remoteHalt},
+        {"softEmergency", d.softEmergency}, {"remoteEmergency", d.remoteEmergency},
+        {"robotCollision", d.robotCollision}, {"forceControlMode", d.forceControlMode},
+        {"armCanbusStatus", d.armCanbusStatus}, {"encoderErrorStatus", d.encoderErrorStatus},
+        {"encoderLinesError", d.encoderLinesError}, {"jointErrorStatus", d.jointErrorStatus},
+        {"jointCollisionDetect", d.jointCollisionDetect},
+        {"singularityOverSpeedAlarm", d.singularityOverSpeedAlarm},
+        {"robotCurrentAlarm", d.robotCurrentAlarm}, {"brakeStuats_raw", d.brakeStuats},
+        {"toolIoError", d.toolIoError}
     };
-    checkState();
-    if (rpc.getRuntimeMachine()->getStatus() != RuntimeState::Stopped)
-        throw std::runtime_error("Stop the existing robot program before sending a target");
-    if (motion->getExecId() != -1 || !state->isSteady())
-        throw std::runtime_error("Robot is moving; wait until it is steady");
-    if (arrived(state->getTcpPose())) {
+    for (std::size_t i = 0; i < rawFlags.size(); ++i) {
+        if (i) std::cout << ',';
+        std::cout << '"' << rawFlags[i].first << "\":" << rawFlags[i].second;
+    }
+    std::cout << '}';
+    printBlockers(flags);
+    std::cout << '}' << std::endl;
+    std::cerr << "remoteHalt_raw=" << d.remoteHalt
+              << " is a raw power-off input; 1 alone is not classified as a fault.\n"
+                 "Diagnosis does not grant motion permission; controller interlocks still apply.\n";
+}
+
+void checkMotionSafety(const Session& session)
+{
+    const auto d = readDiagnosis(session);
+    const auto flags = blockingFlags(d);
+    if (!flags.empty()) {
+        std::ostringstream message;
+        message << "Motion blocked by diagnosis: ";
+        for (std::size_t i = 0; i < flags.size(); ++i) {
+            if (i) message << ", ";
+            message << flags[i].first << '=' << flags[i].second;
+        }
+        message << "; remoteHalt_raw=" << d.remoteHalt;
+        if (!d.armPowerStatus) message << "; power on/start from the teach pendant first";
+        throw std::runtime_error(message.str());
+    }
+}
+
+bool arrived(const wayPoint_S& actual, const Pos& target, const Ori& orientation)
+{
+    const auto& p = actual.cartPos.position;
+    const auto& q = actual.orientation;
+    const double positionError = std::hypot(std::hypot(p.x - target.x, p.y - target.y), p.z - target.z);
+    const double dot = q.w * orientation.w + q.x * orientation.x + q.y * orientation.y + q.z * orientation.z;
+    const double angleError = 2 * std::acos(std::clamp(std::abs(dot), 0.0, 1.0));
+    return positionError < 1e-5 && angleError < 1e-4;
+}
+
+void move(const Session& session, const Options& o)
+{
+    checkMotionSafety(session);
+    if (robotState(session.handle) != RobotStopped)
+        throw std::runtime_error("Stop the existing robot motion/program before sending a target");
+    const auto current = readWaypoint(session);
+    Pos target = current.cartPos.position;
+    Ori orientation = current.orientation;
+    if (!o.pose.empty()) {
+        target = {o.pose[0], o.pose[1], o.pose[2]};
+        const Rpy rpy{o.pose[3], o.pose[4], o.pose[5]};
+        check(rs_rpy_to_quaternion(session.handle, &rpy, &orientation), "rs_rpy_to_quaternion");
+    } else {
+        target.x += o.delta[0] / 1000;
+        target.y += o.delta[1] / 1000;
+        target.z += o.delta[2] / 1000;
+    }
+    if (!std::isfinite(target.x) || !std::isfinite(target.y) || !std::isfinite(target.z))
+        throw std::invalid_argument("Target position overflow");
+    if (arrived(current, target, orientation)) {
         std::cerr << "Already at target; no motion requested\n";
         return;
     }
+
+    // Legacy MoveL takes JOINT targets; solve IK near the current configuration.
+    wayPoint_S solution{};
+    double seed[ARM_DOF];
+    std::copy(std::begin(current.jointpos), std::end(current.jointpos), seed);
+    check(rs_inverse_kin(session.handle, seed, &target, &orientation, &solution), "rs_inverse_kin");
+    validate(solution);
+    if (!arrived(solution, target, orientation))
+        throw std::runtime_error("Inverse kinematics did not resolve the requested flange pose");
+
+    if (o.dryRun) {
+        std::cout << std::setprecision(17)
+                  << "{\"dry_run\":true,\"frame\":\"base\",\"pose_reference\":\"flange\"";
+        printArray("target_position_m", {target.x, target.y, target.z});
+        printArray("target_quaternion_wxyz", {orientation.w, orientation.x, orientation.y, orientation.z});
+        printArray("ik_joints_rad", Values(std::begin(solution.jointpos), std::end(solution.jointpos)));
+        std::cout << '}' << std::endl;
+        std::cerr << "Dry run: IK valid; no motion or motion-configuration command sent.\n";
+        return;
+    }
+
+    check(rs_init_global_move_profile(session.handle), "rs_init_global_move_profile");
+    check(rs_set_base_coord(session.handle), "rs_set_base_coord");
+    check(rs_set_none_tool_kinematics_param(session.handle), "rs_set_none_tool_kinematics_param");
+    MoveRelative offset{};
+    offset.relativeOri.w = 1;
+    check(rs_set_relative_offset_on_base(session.handle, &offset), "rs_set_relative_offset_on_base");
+    check(rs_set_no_arrival_ahead(session.handle), "rs_set_no_arrival_ahead");
+    JointVelcAccParam jointLimits{};
+    std::fill(std::begin(jointLimits.jointPara), std::end(jointLimits.jointPara), 0.2);
+    check(rs_set_global_joint_maxacc(session.handle, &jointLimits), "rs_set_global_joint_maxacc");
+    check(rs_set_global_joint_maxvelc(session.handle, &jointLimits), "rs_set_global_joint_maxvelc");
+    check(rs_set_global_end_max_line_acc(session.handle, 0.05), "rs_set_global_end_max_line_acc");
+    check(rs_set_global_end_max_line_velc(session.handle, 0.01), "rs_set_global_end_max_line_velc");
+    check(rs_set_global_end_max_angle_acc(session.handle, 0.1), "rs_set_global_end_max_angle_acc");
+    check(rs_set_global_end_max_angle_velc(session.handle, 0.1), "rs_set_global_end_max_angle_velc");
+    checkMotionSafety(session);
+    if (robotState(session.handle) != RobotStopped)
+        throw std::runtime_error("Robot started moving before the target could be sent");
     checkCancelled();
     try {
-        // One MoveL target: acceleration 0.05 m/s^2, speed 0.01 m/s, no blending.
-        check(motion->moveLine(target, 0.05, 0.01, 0, 0), "moveLine");
+        check(rs_move_line(session.handle, solution.jointpos, false), "rs_move_line");
         const auto start = Clock::now();
         while (std::chrono::duration<double>(Clock::now() - start).count() < o.timeout) {
             checkCancelled();
-            checkState();
-            const auto actual = state->getTcpPose();
-            showPose(actual);
-            if (motion->getExecId() == -1 && state->isSteady() && arrived(actual)) {
-                std::cerr << "Arrived: position error < 0.01 mm, orientation error < 0.0001 rad\n";
+            checkMotionSafety(session);
+            const auto actual = readWaypoint(session);
+            showPose(session.handle, actual);
+            const auto state = robotState(session.handle);
+            if (state == RobotStopped && arrived(actual, target, orientation)) {
+                std::cerr << "Arrived: flange position error < 0.01 mm, orientation error < 0.0001 rad\n";
                 return;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            if (state == RobotPaused) throw std::runtime_error("Robot motion was paused");
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
         }
         throw std::runtime_error("Timed out waiting for the target");
     } catch (...) {
-        // Disconnecting does not cancel a motion already accepted by the controller.
-        try {
-            check(motion->stopLine(0.1, 0.1), "stopLine");
-            std::cerr << "Requested stopLine after interruption/error\n";
-        } catch (const std::exception& e) { std::cerr << "Could not request stop: " << e.what() << '\n'; }
-        catch (...) { std::cerr << "Could not request stop\n"; }
+        const int result = rs_move_stop(session.handle);
+        std::cerr << "Requested rs_move_stop after interruption/error; return code " << result << '\n';
         throw;
     }
 }
@@ -281,32 +425,29 @@ int main(int argc, char** argv)
     try {
         const auto o = parse(argc, argv);
         if (o.help) {
-            std::cout << "robot_communication [read|watch|move] [--ip IP] [--user USER] [--password PASSWORD]\n"
-                         "  read                         Read TCP pose and joint positions (default)\n"
-                         "  watch [--seconds 10] [--hz 10]  RTDE feedback, 1..50 Hz; Ctrl+C to stop\n"
+            std::cout << "robot_communication [read|watch|diagnose|move] [--ip IP] [--port 8899]\n"
+                         "  read                          Read flange pose and joint positions (default)\n"
+                         "  watch [--seconds 10] [--hz 10]  Poll legacy feedback at 1..50 Hz; Ctrl+C to stop\n"
+                         "  diagnose                      Read raw diagnosis and application motion blockers\n"
                          "  move --pose X Y Z RX RY RZ [--timeout 30]\n"
                          "  move --delta-mm DX DY DZ [--timeout 30]\n"
-                         "Pose: base frame, metres / RPY radians. Delta: base frame, millimetres.\n"
-                         "Default: 127.0.0.1, aubo / 123456. RPC: 30004, RTDE: 30010.\n"
-                         "move requests motion; it does not power on or change TCP configuration.\n";
+                         "  move ... --dry-run             Check diagnosis and IK without sending motion/configuration\n"
+                         "Pose: FLANGE in base frame, metres / RPY radians. Delta: base frame, millimetres.\n"
+                         "The teach pendant's selected TCP is not applied.\n"
+                         "Default: 127.0.0.1:8899. Legacy rs_login does not take user/password arguments.\n"
+                         "read/watch/diagnose do not power on or move the robot. move requires power on/start first.\n";
             return 0;
         }
         checkCancelled();
-        if (o.command == "watch") watch(o);
-        else {
-            Session<RpcClient> session;
-            check(session.client.setRequestTimeout(5000), "Set RPC timeout");
-            session.open(o, 30004);
-            auto& rpc = session.client;
-            const auto names = rpc.getRobotNames();
-            if (names.empty()) throw std::runtime_error("No robot configured on the controller");
-            auto robot = rpc.getRobotInterface(names.front());
-            auto state = robot->getRobotState();
-            std::cerr << "Robot=" << names.front() << " mode=" << state->getRobotModeType()
-                      << " safety=" << state->getSafetyModeType() << '\n';
-            if (o.command == "read") showPose(state->getTcpPose(), state->getJointPositions());
-            else move(rpc, robot, o);
-        }
+        Session session;
+        session.open(o);
+        std::cerr << "Robot motion state=" << static_cast<int>(robotState(session.handle))
+                  << " (0=Stopped, 1=Running, 2=Paused, 3=Resumed); pose reference=flange\n";
+        checkCancelled();
+        if (o.command == "read") showPose(session.handle, readWaypoint(session));
+        else if (o.command == "watch") watch(session, o);
+        else if (o.command == "diagnose") diagnose(session);
+        else move(session, o);
         return interrupted ? 130 : 0;
     } catch (const std::exception& e) {
         std::cerr << "ERROR: " << e.what() << '\n';
